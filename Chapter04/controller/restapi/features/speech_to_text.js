@@ -13,29 +13,69 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-var extend = require('extend');
-var watson = require('watson-developer-cloud');
-var vcapServices = require('vcap_services');
+var request = require('request');
 var config = require('../../env.json');
+var TextToSpeechV1 = require('watson-developer-cloud/text-to-speech/v1');
 
+var textToSpeech = new TextToSpeechV1({
+    iam_apikey: config.text_to_speech.apikey,
+    url: config.text_to_speech.url
+});
+// first invocation of text to speech always fails. let's just get that one out of the way. 
+textToSpeech.synthesize({ text: "test text", accept: 'audio/wav', voice: 'en-US_AllisonVoice' }, function(error) {});
+
+/**
+ * this returns a speech to text token to be used in the browser for direct access
+ * to the Watson speech to text service. 
+ * @param {NodeJS Request Object} req - provides information about the inbound request
+ * @param {NodeJS Response Object} res - this is how we respond back to the browser
+ */
 exports.stt_token = function(req, res) {
-    var sttConfig = extend(config.speech_to_text, vcapServices.getCredentials('speech_to_text'));
+    var methodName = 'stt_token';
+    // The following three lines translate the curl request provided by IBM into a nodeJS request format so that the token can be retrieved by your server code. 
+    var form = { grant_type: 'urn:ibm:params:oauth:grant-type:apikey', apikey: config.speech_to_text.apikey }
+    var headers = { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' };
+    var options = { url: 'https://iam.bluemix.net/identity/token', method: 'POST', form: form, headers: headers };
 
-    var sttAuthService = watson.authorization(sttConfig);
-
-    sttAuthService.getToken({
-        url: sttConfig.url
-    }, function(err, token) {
-        if (err) {
-            console.log('Error retrieving speech to text token: ', err);
-            res.status(500).send('Error retrieving speech to text token');
-            return;
-        }
-        res.send(token);
+    // get the new token
+    request(options, function(error, response, body) {
+        if (!error && response.statusCode == 200)
+        // send the token back as the 'success' item in the returned json object
+        { res.send({ success: JSON.parse(body).access_token }); } else
+        // send the failure message back as the 'failed' item in the returned json object.
+        { console.log(methodName + ' error: ', error);
+            res.send({ failed: error.message }) }
     });
 }
 
-exports.tts_synthesize = function(req, res) {
-  console.log("tts_synthesize entered");
+/**
+ * this returns a speech to text token to be used in the browser for direct access
+ * to the Watson speech to text service. 
+ * @param {NodeJS Request Object} req - provides information about the inbound request
+ * This is accessed via a post request rather than a get request. A post request normally
+ * has options (data) associated with it and these come in to nodejs as part of the 
+ * req.body object.
+ * @param {NodeJS Response Object} res - this is how we respond back to the browser
+ */
 
+exports.tts_synthesize = function(req, res) {
+    var methodName = 'tts_synthesize';
+    var text = req.query.text;
+    // use the environment variables to configure text to speech
+    // give the synthesizer the data from the browser.
+    // you may find that you get errors if you send in an empty text string. 
+    // this can be avoided by testing req.query to see if it has any text in it
+    // that would be a good exercise to extend this code
+    var stream = textToSpeech.synthesize({
+            text: text,
+            accept: 'audio/wav',
+            voice: 'en-US_AllisonVoice' // change this if you want to use a different voice or language.
+                // if there's an error, log it to the server console window.
+        }, function(error) { if (error) { console.log(error); } })
+        .on('response', function(audioRes) {
+            if (audioRes.statusCode === 200) {
+                // pipe sends the sound as a stream (vs a downloaded file) back to the browser
+                stream.pipe(res);
+            }
+        });
 }
